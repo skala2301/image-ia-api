@@ -1,0 +1,140 @@
+from typing import Any
+
+from src.application.dtos import ResponseDataDictDTO, ResponseDataListDTO
+from src.domain.schema.google_payload import GooglePayload
+from google import genai
+from google.genai.types import RawReferenceImage, MaskReferenceImage, MaskReferenceConfig, EditImageConfig
+import base64
+
+import io
+
+from PIL import Image 
+
+from os import getenv
+
+import logging # Import logging
+
+# Configure basic logging for debugging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+
+from os import getenv
+
+class GoogleService:
+    def __init__(self) -> None:
+        cloud_project = getenv("GOOGLE_CLOUD_PROJECT")
+        cloud_location = getenv("GOOGLE_CLOUD_LOCATION")
+        use_vertexai_str = getenv("GOOGLE_GENAI_USE_VERTEXAI", "false")
+        use_vertexai = use_vertexai_str.lower() == "true"
+
+        if not cloud_project or not cloud_location or not use_vertexai:
+            missing = []
+            if not cloud_project: missing.append("GOOGLE_CLOUD_PROJECT")
+            if not cloud_location: missing.append("GOOGLE_CLOUD_LOCATION")
+            if not use_vertexai: missing.append("GOOGLE_GENAI_USE_VERTEXAI")
+            raise ValueError(
+                f"Configuration Error: Missing required environment variables for Vertex AI: {', '.join(missing)}. "
+                "Please set these (e.g., `export VAR_NAME=value`) before running the app."
+            )
+
+        self.google_client: genai.Client = genai.Client(
+            vertexai=use_vertexai,
+            project=cloud_project,
+            location=cloud_location,
+        )
+        #logging.info("genai.Client initialized successfully.")
+
+    @property
+    def client(self) -> genai.Client:
+        """Get the GoogleClient instance."""
+        return self.google_client
+    
+    async def outpaint(self, data: GooglePayload) -> ResponseDataDictDTO:
+        """Outline image using Vertex AI"""
+
+        try:
+            input_image_b64 = data.input_image_b64
+            mask_image_b64 = data.mask_image_b64
+            prompt = data.prompt
+            model_name = data.model
+            mask_dilation = data.mask_dilation
+
+            if not input_image_b64 or not mask_image_b64:
+                logging.error("Input image or mask image (base64) is missing in payload.")
+                raise ValueError("Input image and mask image (base64) are required.")
+
+            input_image_bytes = base64.b64decode(input_image_b64)
+            mask_image_bytes = base64.b64decode(mask_image_b64)
+            
+            # logging.info(f"Decoded input_image_bytes size: {len(input_image_bytes)} bytes")
+            # logging.info(f"Decoded mask_image_bytes size: {len(mask_image_bytes)} bytes")
+
+            if not input_image_bytes:
+                raise ValueError("Decoded input image bytes are empty.")
+            if not mask_image_bytes:
+                raise ValueError("Decoded mask image bytes are empty.")
+
+        except ValueError as ve:
+            raise ve
+        except Exception as e:
+            logging.error(f"Error parsing input data in outline method: {e}", exc_info=True)
+            raise ValueError(f"Failed to parse input data for image processing: {e}")
+
+        # --- 2. Construct genai objects by explicitly passing bytes to 'image_bytes' field ---
+        try:
+            raw_ref = RawReferenceImage(
+                reference_image=genai.types.Image(image_bytes=input_image_bytes),
+                reference_id=0
+            )
+            mask_ref = MaskReferenceImage(
+                reference_id=1,
+                reference_image=genai.types.Image(image_bytes=mask_image_bytes),
+                config=MaskReferenceConfig(
+                    mask_mode="MASK_MODE_USER_PROVIDED",
+                    mask_dilation=mask_dilation,
+                ),
+            )
+            # logging.info("genai.types.Image objects created successfully using 'image_bytes' keyword.")
+        except Exception as e:
+            logging.error(f"Error creating genai.types.Image objects (explicit image_bytes): {e}", exc_info=True)
+            raise RuntimeError(f"Failed to prepare image data for Vertex AI: {e}")
+
+        # --- 3. Call the Imagen API (already corrected for 'await') ---
+        try:
+            # logging.info(f"Calling Vertex AI Imagen API with model: {model_name} and prompt: '{prompt}'")
+            image_response = self.client.models.edit_image(
+                model=model_name,
+                prompt=prompt,
+                reference_images=[raw_ref, mask_ref],
+                config=EditImageConfig(
+                    edit_mode="EDIT_MODE_OUTPAINT",
+                ),
+            )
+            # logging.info("Vertex AI Imagen API call completed.")
+            
+            # --- 4. Process the Response (NEW CORRECTION HERE) ---
+            if not image_response.generated_images:
+                logging.error("Vertex AI returned no generated images.")
+                raise RuntimeError("No image generated by Vertex AI.")
+
+            # Get the raw bytes from the generated Image object
+            generated_image_bytes = image_response.generated_images[0].image.image_bytes
+
+            # Convert these bytes to a PIL Image object
+            generated_pil_image = Image.open(io.BytesIO(generated_image_bytes))
+            
+            # logging.info(f"Generated image converted to PIL. Size: {generated_pil_image.size}")
+
+            # Convert generated PIL Image back to base64 for response
+            output_buffer = io.BytesIO()
+            generated_pil_image.save(output_buffer, format="PNG") # Save as PNG or JPEG
+            output_image_b64 = base64.b64encode(output_buffer.getvalue()).decode("utf-8")
+            # logging.info(f"Generated image encoded to base64. Size: {len(output_image_b64)} chars.")
+
+            return ResponseDataDictDTO(
+                message="Image outlined successfully",
+                data={"generated_image_b64": output_image_b64}
+            )
+
+        except Exception as e:
+            logging.error(f"Vertex AI API call or response processing error: {e}", exc_info=True)
+            raise RuntimeError(f"Vertex AI API call or image processing failed: {e}")
