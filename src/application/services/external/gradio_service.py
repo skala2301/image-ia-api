@@ -5,6 +5,7 @@ from os import getenv
 from src.application.dtos import ResponseDataDictDTO
 
 from src.domain.schema.image_edit_payload import ImgExpandPayloadV2
+from src.shared.helpers.encode import encode_image_to_base64
 
 import logging # Import logging
 
@@ -95,10 +96,12 @@ class GradioService:
                     overlap_bottom=img_payload.overlap_bottom,
                     api_name=api_name
             )
+
+            image_b64=encode_image_to_base64(result[0])
             return ResponseDataDictDTO(
                 message="Image outpainted successfully",
-                data={"generated_image_b64": result,
-                      "image_data": image_data}
+                data={"generated_image_b64": image_b64,
+                      "success": True}
             )
         except Exception as e:
             logging.error(f"Gradio AI API call or response processing error: {e}", exc_info=True)
