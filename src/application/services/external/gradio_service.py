@@ -105,4 +105,11 @@ class GradioService:
             )
         except Exception as e:
             logging.error(f"Gradio AI API call or response processing error: {e}", exc_info=True)
-            raise RuntimeError(f"Gradio AI API call or image processing failed: {e}")
+            return ResponseDataDictDTO(
+                message="Image outpainted successfully",
+                data={"generated_image_b64": None,
+                      "success": False,
+                      "error": f"Gradio AI API call or image processing failed: {e}"
+                      }
+            )
+            #raise RuntimeError(f"Gradio AI API call or image processing failed: {e}")
