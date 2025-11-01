@@ -4,6 +4,7 @@ from typing import Any
 from os import getenv
 from src.application.dtos import ResponseDataDictDTO
 
+
 from src.domain.schema.image_edit_payload import ImgExpandPayloadV2
 from src.shared.helpers.encode import encode_image_to_base64
 
